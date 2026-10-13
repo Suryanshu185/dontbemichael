@@ -98,7 +98,16 @@ export class MailApprovals implements ProposalStore {
         && typeof rec.sentAt === 'number'
         && Number.isFinite(rec.sentAt);
     }) : [];
-    const paused = raw.paused && typeof raw.paused === 'object' && !Array.isArray(raw.paused) ? (raw.paused as Record<string, PausedNotice>) : {};
+    // A damaged notice is dropped, so pausedDue starts that pause's wait again.
+    const paused: Record<string, PausedNotice> = {};
+    if (raw.paused && typeof raw.paused === 'object' && !Array.isArray(raw.paused)) {
+      const now = this.now();
+      for (const [key, n] of Object.entries(raw.paused as Record<string, unknown>)) {
+        if (!n || typeof n !== 'object' || Array.isArray(n)) continue;
+        const { since, told } = n as Record<string, unknown>;
+        if (typeof since === 'number' && Number.isFinite(since) && since <= now && typeof told === 'boolean') paused[key] = { since, told };
+      }
+    }
     return { ...raw, proposals: ok<MailProposal>(raw.proposals), standing: ok<StandingApproval>(raw.standing), sends, paused };
   }
 
