@@ -1278,6 +1278,9 @@ async function runMailRequest(
       const problem = standingProblem(rule, agentId, mailbox!, input);
       if (problem) return { status: 409, body: { error: problem } };
       if (!input.to || !input.subject || !input.body.trim()) return { status: 400, body: { error: 'send needs "to", "subject" and "body".' } };
+      // Same rule as every other operation below: a To with no real address
+      // never reaches the fit check, a card on Ask me or the mail server.
+      if (!namesARecipient(input.to)) return { status: 400, body: { error: 'send needs an email address in "to", such as name@example.com.' } };
       // The same email sent again while the first is still being checked or sent
       // waits for nothing and never goes out twice.
       const sendKey = JSON.stringify([agentId, mailbox, input.to, input.cc ?? '', input.subject, input.body, input.replyTo ?? null, input.thread?.inReplyTo ?? null]);
@@ -1374,6 +1377,10 @@ async function runMailRequest(
       return { status: 200, body: done };
     }
     if (!input.to || !input.subject) return { status: 400, body: { error: `${op} needs "to" and "subject".` } };
+    // A To with no real address in it (a description such as "the customer") is
+    // refused here, before a draft is saved, a card reaches the owner or an
+    // email goes out with only its Cc.
+    if (!namesARecipient(input.to)) return { status: 400, body: { error: `${op} needs an email address in "to", such as name@example.com.` } };
     if (op === 'draft') return { status: 200, body: await svc.draft(mailbox!, input) };
     if (op === 'propose') {
       if (!deps.proposals) return { status: 503, body: { error: 'Approvals are not available right now. Tell Michael.' } };

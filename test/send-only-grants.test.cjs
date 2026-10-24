@@ -679,6 +679,60 @@ test('an approved card whose approved text is damaged is refused, never sent as 
   assert.equal(state.sends[0].text, 'Owner edited body');
 });
 
+test('propose refuses a To with no real address before the owner is asked, and nothing is saved or sent', async (t) => {
+  // Value: protects=the owner is never asked to approve an email that cannot go out, and its Cc alone never carries it; fails_when=propose files a card for a To that names nobody (a description such as "the customer") because the Cc looks fine; why_new=propose only checked that To was not empty, so the send time check withdrew a card the owner had already approved; seam=fake mail transport (shows nothing is handed to it; what a server does with a Cc was checked by hand, not here)
+  for (const to of ['the customer', 'foo@', ',']) {
+    const { approvals, dir, call, state } = setup(t, office('approval'), { now: NOW });
+    const r = await call('dwight', 'propose', { mailbox: 'ceo', to, cc: 'c@d.com', subject: 'Intro', body: 'Hello.' });
+    assert.equal(r.status, 400, to);
+    assert.match(r.body.error, /propose needs an email address in "to"/, to);
+    assert.equal(r.body.proposal, undefined, `${to}: no proposal id was given to the member`);
+    assert.deepEqual(approvals.waiting(), [], `${to}: nothing waits on Ask me`);
+    const saved = fs.existsSync(path.join(dir, 'mail-proposals.json')) ? readStore(dir).proposals : [];
+    assert.deepEqual(saved, [], `${to}: nothing was saved`);
+    assert.equal(state.sends.length, 0, `${to}: nothing was handed to the mail transport`);
+  }
+});
+
+test('propose still files the To formats the mail library reads, exactly as written', async (t) => {
+  // Value: protects=the new To check never turns away an address the mail library can use; fails_when=propose refuses a display name, a quoted local part, a group, a semicolon list or a plain address; why_new=guards the new check at the top of the operations; seam=fake mail transport (nothing is sent at propose time)
+  for (const to of ['Dwight Schrute <dwight@example.com>', '"john doe"@example.com', 'Team: a@b.com, c@d.com;', 'a@b.com; c@d.com', 'dwight@example.com']) {
+    const { approvals, call, state } = setup(t, office('approval'), { now: NOW });
+    const r = await call('dwight', 'propose', { mailbox: 'ceo', to, cc: 'c@d.com', subject: 'Intro', body: 'Hello.' });
+    assert.equal(r.status, 200, to);
+    assert.deepEqual(approvals.waiting().map((p) => p.to), [to], `${to}: one card, filed as written`);
+    assert.equal(state.sends.length, 0, `${to}: nothing is sent before the owner decides`);
+  }
+});
+
+test('a draft, a direct send and a standing send refuse a To with no real address too', async (t) => {
+  // Value: protects=no operation lets a Cc stand in for a To that names nobody, and no card for one reaches the owner; fails_when=draft saves, a Can send member sends, or a standing send is sent or filed for the owner with a To such as "the customer"; why_new=the three share the check propose now uses; seam=fake mail transport (shows nothing is handed to it)
+  const email = { mailbox: 'ceo', to: 'the customer', cc: 'c@d.com', subject: 'Intro', body: 'Hello.' };
+  const draft = setup(t, office('draft'), { now: NOW });
+  const d = await draft.call('dwight', 'draft', email);
+  assert.equal(d.status, 400);
+  assert.match(d.body.error, /draft needs an email address in "to"/);
+  assert.equal(draft.state.folders.Drafts.length, 0, 'no draft was saved');
+
+  const direct = setup(t, office('send'), { now: NOW });
+  const s = await direct.call('dwight', 'send', email);
+  assert.equal(s.status, 400);
+  assert.match(s.body.error, /send needs an email address in "to"/);
+  assert.equal(direct.state.sends.length, 0, 'a direct send handed nothing to the mail transport');
+
+  // A standing send is refused before the fit check, so a yes or a no from it changes nothing.
+  for (const fits of [true, false]) {
+    const { approvals, dir, cfg, svc, state } = setup(t, office('approval'), { now: NOW });
+    seedStore(dir, { standing: [{ id: 'sa_1', agentId: 'dwight', mailbox: 'ceo', kind: 'Intro emails', createdAt: NOW - HOUR, fromProposal: 'mp_0' }] });
+    const deps = { getConfig: () => cfg, proposals: approvals, present: () => true, audit() {}, fitCheck: async () => (fits ? { fits: true } : { fits: false, reason: 'It is not that kind.' }) };
+    const r = await handleMailRequest(svc, deps, 'dwight', 'send', { ...email, standing: 'sa_1' });
+    assert.equal(r.status, 400, `fit check ${fits}`);
+    assert.match(r.body.error, /send needs an email address in "to"/);
+    assert.deepEqual(approvals.waiting(), [], `fit check ${fits}: no card reached the owner`);
+    assert.equal(state.sends.length, 0, `fit check ${fits}: nothing was handed to the mail transport`);
+  }
+});
+
 test('valid waiting, approved and sending cards read and behave as they did', async (t) => {
   // Value: protects=the repair changes nothing for a well formed card (issue 101 for the sending one); fails_when=a valid card is rewritten, an approved one is handed on other than as approved, or a sending one is sent; why_new=guards the new load step; seam=fake mail transport
   const { approvals, dir, call, state } = setup(t, office('approval'), { now: NOW });
